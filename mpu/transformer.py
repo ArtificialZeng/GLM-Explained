@@ -600,7 +600,7 @@ def scaled_init_method(sigma, num_layers):
     return init_
 
 
-class GPT2ParallelTransformer(torch.nn.Module):
+class GPT2ParallelTransformer(torch.nn.Module): # 定义一个名为 GPT2ParallelTransformer 的类，继承自 PyTorch 的 nn.Module
     """GPT-2 transformer.
 
     This module takes input from embedding layer and it's output can
@@ -634,7 +634,9 @@ class GPT2ParallelTransformer(torch.nn.Module):
                                             scaling for the output weights (
                                             output of self attention and mlp).
     """
-
+    '''这是类的初始化函数，用于初始化该类的一些参数和属性。它接收多个参数，包括：层数、隐藏层大小、注意力头的数量、最大序列长度、最大记忆长度、
+    嵌入的dropout概率、注意力的dropout概率、输出的dropout概率、是否进行激活检查点、进行检查点的层数、层归一化的epsilon、
+    初始化方法的标准差、是否对输出权重进行缩放初始化、是否使用相对编码、是否使用块位置编码、是否使用执行者、是否使用解码器层和注意力的比例。'''
     def __init__(self,
                  num_layers,
                  hidden_size,
@@ -654,58 +656,67 @@ class GPT2ParallelTransformer(torch.nn.Module):
                  performer=False,
                  use_decoder_layer=False,
                  attention_scale=1.0,
-                 ):
-        super(GPT2ParallelTransformer, self).__init__()
-        self.hidden_size = hidden_size
-        # Store activation checkpoiting flag.
-        self.checkpoint_activations = checkpoint_activations
-        self.checkpoint_num_layers = checkpoint_num_layers
-        self.max_memory_length = max_memory_length
-        self.performer = performer
-        self.use_decoder_layer = use_decoder_layer
-        assert not (performer and relative_encoding)
+                 ):  
+        # 这是类的初始化函数，用于初始化该类的一些参数和属性
+                 
+        super(GPT2ParallelTransformer, self).__init__()  # 对父类 `torch.nn.Module` 的初始化
+        
+        self.hidden_size = hidden_size  # 设置隐藏层大小的属性
+        self.checkpoint_activations = checkpoint_activations  # 设置是否进行激活检查点的属性
+        self.checkpoint_num_layers = checkpoint_num_layers  # 设置进行检查点的层数的属性
+        self.max_memory_length = max_memory_length  # 设置最大记忆长度的属性
+        self.performer = performer  # 设置是否使用执行者的属性
+        self.use_decoder_layer = use_decoder_layer  # 设置是否使用解码器层的属性
+        
+        assert not (performer and relative_encoding)  # 断言如果 `performer` 和 `relative_encoding` 都为 True，则引发错误
 
-        output_layer_init_method = None
-        if use_scaled_init_for_output_weights:
-            output_layer_init_method = scaled_init_method(init_method_std,
-                                                          num_layers)
-        # Embeddings dropout
-        self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
-        self.relative_encoding = relative_encoding
-        self.block_position_encoding = block_position_encoding
-        if relative_encoding:
-            # Relative position embedding
-            self.position_embeddings = PositionalEmbedding(hidden_size)
-            # Per attention head and per partition values.
-            world_size = get_model_parallel_world_size()
-            self.hidden_size_per_attention_head = divide(hidden_size,
-                                                         num_attention_heads)
-            self.num_attention_heads_per_partition = divide(num_attention_heads,
-                                                            world_size)
+        output_layer_init_method = None  # 初始化输出层初始化方法为None
+        if use_scaled_init_for_output_weights:  # 如果使用缩放的初始化方法进行权重初始化
+            output_layer_init_method = scaled_init_method(init_method_std, num_layers)  # 则设置output_layer_init_method为scaled_init_method的输出
+        
+        self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)  # 创建一个dropout层，丢弃概率为embedding_dropout_prob
+        
+        self.relative_encoding = relative_encoding  # 设置relative_encoding属性
+        self.block_position_encoding = block_position_encoding  # 设置block_position_encoding属性
+        
+        if relative_encoding:  # 如果启用了relative_encoding
+            self.position_embeddings = PositionalEmbedding(hidden_size)  # 创建一个位置嵌入层
+        
+            world_size = get_model_parallel_world_size()  # 获取模型并行的世界大小
+        
+            # 计算每个注意力头的隐藏层大小和每个分区的注意力头数
+            self.hidden_size_per_attention_head = divide(hidden_size, num_attention_heads)
+            self.num_attention_heads_per_partition = divide(num_attention_heads, world_size)
+        
+            # 创建两个bias参数，并进行初始化
             self.r_w_bias = torch.nn.Parameter(
                 torch.Tensor(self.num_attention_heads_per_partition, self.hidden_size_per_attention_head))
-            self.r_w_bias.model_parallel = True
             self.r_r_bias = torch.nn.Parameter(
                 torch.Tensor(self.num_attention_heads_per_partition, self.hidden_size_per_attention_head))
-            self.r_r_bias.model_parallel = True
-            # Always initialize bias to zero.
+                
+            self.r_w_bias.model_parallel = True  # 将r_w_bias的model_parallel属性设置为True
+            self.r_r_bias.model_parallel = True  # 将r_r_bias的model_parallel属性设置为True
+            
+            # 在不计算梯度的情况下，将r_w_bias和r_r_bias初始化为零
             with torch.no_grad():
                 self.r_w_bias.zero_()
                 self.r_r_bias.zero_()
-        else:
-            # Position embedding (serial).
+        
+        else:  # 如果relative_encoding为False
+            # 如果block_position_encoding为True，那么对max_sequence_length加1，否则不变
             if block_position_encoding:
                 self.position_embeddings = torch.nn.Embedding(max_sequence_length + 1, hidden_size)
                 self.block_position_embeddings = torch.nn.Embedding(max_sequence_length + 1, hidden_size)
-                torch.nn.init.normal_(self.block_position_embeddings.weight, mean=0.0, std=init_method_std)
+                torch.nn.init.normal_(self.block_position_embeddings.weight, mean=0.0, std=init_method_std)  # 对block_position_embeddings的权重进行正态分布初始化
             else:
-                self.position_embeddings = torch.nn.Embedding(max_sequence_length, hidden_size)
-            # Initialize the position embeddings.
-            torch.nn.init.normal_(self.position_embeddings.weight, mean=0.0, std=init_method_std)
+                self.position_embeddings = torch.nn.Embedding(max_sequence_length, hidden_size)  # 创建一个位置嵌入层
+                
+            torch.nn.init.normal_(self.position_embeddings.weight, mean=0.0, std=init_method_std)  # 对position_embeddings的权重进行正态分布初始化
+                
 
-        def get_layer():
-            if use_decoder_layer:
-                return ParallelDecoderLayer(
+        def get_layer():  # 定义一个内部函数，用于获取不同类型的层
+            if use_decoder_layer:  # 如果使用解码器层
+                return ParallelDecoderLayer(  # 返回ParallelDecoderLayer实例
                     hidden_size,
                     num_attention_heads,
                     attention_dropout_prob,
@@ -714,8 +725,8 @@ class GPT2ParallelTransformer(torch.nn.Module):
                     unscaled_init_method(init_method_std),
                     output_layer_init_method=output_layer_init_method
                 )
-            else:
-                return ParallelTransformerLayer(
+            else:  # 否则
+                return ParallelTransformerLayer(  # 返回ParallelTransformerLayer实例
                     hidden_size,
                     num_attention_heads,
                     attention_dropout_prob,
@@ -726,18 +737,16 @@ class GPT2ParallelTransformer(torch.nn.Module):
                     relative_encoding=relative_encoding,
                     performer=performer,
                     attention_scale=attention_scale)
-
-        # Transformer layers.
-        self.layers = torch.nn.ModuleList(
-            [get_layer() for _ in range(num_layers)])
-
-        # Final layer norm before output.
-        self.final_layernorm = LayerNorm(hidden_size, eps=layernorm_epsilon)
-
-        if deepspeed.checkpointing.is_configured():
-            global get_cuda_rng_tracker, checkpoint
-            get_cuda_rng_tracker = deepspeed.checkpointing.get_cuda_rng_tracker
-            checkpoint = deepspeed.checkpointing.checkpoint
+        
+        self.layers = torch.nn.ModuleList([get_layer() for _ in range(num_layers)])  # 创建包含num_layers个get_layer返回的层的模块列表
+        
+        self.final_layernorm = LayerNorm(hidden_size, eps=layernorm_epsilon)  # 创建最后的层规范化 (Layer Normalization) 层
+        
+        if deepspeed.checkpointing.is_configured():  # 如果配置了deepspeed的检查点功能
+            global get_cuda_rng_tracker, checkpoint  # 声明两个全局变量
+            get_cuda_rng_tracker = deepspeed.checkpointing.get_cuda_rng_tracker  # 获取deepspeed的CUDA随机数生成器追踪器
+            checkpoint = deepspeed.checkpointing.checkpoint  # 获取deepspeed的检查点函数
+            #这段代码主要定义了获取不同类型的层的函数 get_layer，并用此函数生成了一系列的模型层。这些层存储在 self.layers 中。此外，这段代码还创建了一个最后的层规范化 (Layer Normalization) 层，以及设置了一些deepspeed的检查点功能相关的变量。
 
     def forward(self, hidden_states, position_ids, attention_mask, memory_states=None, encoder_states=None,
                 return_memory=False, detach_memory=True):
