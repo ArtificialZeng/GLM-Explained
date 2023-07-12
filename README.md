@@ -3,6 +3,7 @@ GLM-Explained
 
 * [/model](./model/)
    * [modeling_glm.py](/model/modeling_glm.py)
+     * class EncoderDecoder(nn.Module):
    * [xx.py](./src/utils/peft_trainer.py) 
    * [/src/transformers](/src/transformers)
      * [training_args.py（do_train、do_eval）](/src/transformers/training_args.py)
