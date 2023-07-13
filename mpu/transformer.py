@@ -18,137 +18,128 @@
 import math
 
 import torch
-import torch.nn.init as init
-from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
+import torch.nn.init as init  # 导入 PyTorch 的初始化函数模块
+from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm  # 从 apex 库中导入 FusedLayerNorm 类，并将其命名为 LayerNorm
 
-from .initialize import get_model_parallel_world_size
-from .layers import ColumnParallelLinear
-from .layers import RowParallelLinear
-from .mappings import gather_from_model_parallel_region
+from .initialize import get_model_parallel_world_size  # 导入当前包的 initialize 模块中的 get_model_parallel_world_size 函数
+from .layers import ColumnParallelLinear  # 导入当前包的 layers 模块中的 ColumnParallelLinear 类
+from .layers import RowParallelLinear  # 导入当前包的 layers 模块中的 RowParallelLinear 类
+from .mappings import gather_from_model_parallel_region  # 导入当前包的 mappings 模块中的 gather_from_model_parallel_region 函数
 
-import deepspeed
+import deepspeed  # 导入 deepspeed 库
 
-from .random import checkpoint
-from .random import get_cuda_rng_tracker
+from .random import checkpoint  # 导入当前包的 random 模块中的 checkpoint 函数
+from .random import get_cuda_rng_tracker  # 导入当前包的 random 模块中的 get_cuda_rng_tracker 函数
 
-from .utils import divide
-from .utils import split_tensor_along_last_dim
+from .utils import divide  # 导入当前包的 utils 模块中的 divide 函数
+from .utils import split_tensor_along_last_dim  # 导入当前包的 utils 模块中的 split_tensor_along_last_dim 函数
+
+class PositionalEmbedding(torch.nn.Module):  # 定义 PositionalEmbedding 类，继承自 PyTorch 的 Module 类
+    def __init__(self, hidden_size):  # 定义类的初始化函数，接受一个参数 hidden_size
+        super(PositionalEmbedding, self).__init__()  # 调用父类的初始化函数
+
+        self.hidden_size = hidden_size  # 将输入的 hidden_size 赋值给类的成员变量
+
+        inv_freq = 1 / (10000 ** (torch.arange(0.0, hidden_size, 2.0) / hidden_size))  # 计算位置嵌入的倒数频率
+        self.register_buffer('inv_freq', inv_freq)  # 注册一个持久缓冲区，将 inv_freq 作为模型的一部分保存下来
+
+    def forward(self, pos_seq, bsz=None):  # 定义类的 forward 函数，接受两个参数 pos_seq 和 bsz
+        sinusoid_inp = torch.ger(pos_seq, self.inv_freq)  # 计算张量的外积，生成一个正弦输入
+        pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)  # 通过将正弦和余弦值拼接起来，生成位置嵌入
+
+        if bsz is not None:  # 如果 bsz 不为空
+            return pos_emb[None, :, :].expand(bsz, -1, -1)  # 扩展 pos_emb 的大小以匹配 bsz
+        else:  # 如果 bsz 为空
+            return pos_emb[None, :, :]  # 直接返回 pos_emb
 
 
-class PositionalEmbedding(torch.nn.Module):
-    def __init__(self, hidden_size):
-        super(PositionalEmbedding, self).__init__()
 
-        self.hidden_size = hidden_size
-
-        inv_freq = 1 / (10000 ** (torch.arange(0.0, hidden_size, 2.0) / hidden_size))
-        self.register_buffer('inv_freq', inv_freq)
-
-    def forward(self, pos_seq, bsz=None):
-        sinusoid_inp = torch.ger(pos_seq, self.inv_freq)
-        pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
-
-        if bsz is not None:
-            return pos_emb[None, :, :].expand(bsz, -1, -1)
-        else:
-            return pos_emb[None, :, :]
-
-
-class ParallelCrossAttention(torch.nn.Module):
-    """Parallel cross-attention layer for Transformer"""
+class ParallelCrossAttention(torch.nn.Module):  # 定义一个名为ParallelCrossAttention的类，这是一个PyTorch模型。
+    """Parallel cross-attention layer for Transformer"""  # 类的作用说明，表示这是一个为Transformer设计的并行交叉注意力层。
 
     def __init__(self, hidden_size, num_attention_heads, attention_dropout_prob, output_dropout_prob, init_method,
-                 output_layer_init_method=None):
-        super(ParallelCrossAttention, self).__init__()
-        # Set output layer initialization if not provided.
-        if output_layer_init_method is None:
-            output_layer_init_method = init_method
-        # Per attention head and per partition values.
-        world_size = get_model_parallel_world_size()
-        self.hidden_size_per_partition = divide(hidden_size, world_size)
+                 output_layer_init_method=None):  # 类的初始化函数，定义一些必要的参数。
+        super(ParallelCrossAttention, self).__init__()  # 调用父类（torch.nn.Module）的初始化函数。
+        if output_layer_init_method is None:  # 检查是否提供了输出层的初始化方法。
+            output_layer_init_method = init_method  # 如果没有提供，则使用普通的初始化方法。
+        world_size = get_model_parallel_world_size()  # 获取并行模型的世界大小。
+        self.hidden_size_per_partition = divide(hidden_size, world_size)  # 计算每个分区的隐藏层大小。
         self.hidden_size_per_attention_head = divide(hidden_size,
-                                                     num_attention_heads)
+                                                     num_attention_heads)  # 计算每个注意力头的隐藏层大小。
         self.num_attention_heads_per_partition = divide(num_attention_heads,
-                                                        world_size)
-        # Strided linear layer.
+                                                        world_size)  # 计算每个分区的注意力头数量。
+        # 创建一个列并行的线性层，用于生成query。
         self.query = ColumnParallelLinear(hidden_size, hidden_size,
                                           gather_output=False,
                                           init_method=init_method)
+        # 创建一个列并行的线性层，用于生成key和value。
         self.key_value = ColumnParallelLinear(hidden_size, 2 * hidden_size,
                                               stride=2,
                                               gather_output=False,
                                               init_method=init_method)
-        # Dropout. Note that for a single iteration, this layer will generate
-        # different outputs on different number of parallel partitions but
-        # on average it should not be partition dependent.
+        # 创建一个dropout层，用于处理注意力分数。
         self.attention_dropout = torch.nn.Dropout(attention_dropout_prob)
 
-        # Output.
+        # 创建一个行并行的线性层，用于处理输出。
         self.dense = RowParallelLinear(hidden_size,
                                        hidden_size,
                                        input_is_parallel=True,
                                        init_method=output_layer_init_method)
+        # 创建一个dropout层，用于处理输出。
         self.output_dropout = torch.nn.Dropout(output_dropout_prob)
 
+        # 检查是否配置了deepspeed的检查点。
         if deepspeed.checkpointing.is_configured():
+            # 如果配置了检查点，获取CUDA的随机数生成器跟踪器。
             global get_cuda_rng_tracker, checkpoint
             get_cuda_rng_tracker = deepspeed.checkpointing.get_cuda_rng_tracker
-            checkpoint = deepspeed.checkpointing.checkpoint
+            # 如果配置了检查点，获取deepspeed的检查点函数。
+            checkpoint = deepspeed.checkpointing.checkpoint # 获取deepspeed的检查点函数，用于在训练中保存和恢复模型状态。
 
-    def _transpose_for_scores(self, tensor):
-        """Transpose a 3D tensor [b, s, np*hn] into a 4D tensor with
-        size [b, np, s, hn].
-        """
-        new_tensor_shape = tensor.size()[:-1] + \
-                           (self.num_attention_heads_per_partition,
-                            self.hidden_size_per_attention_head)
-        tensor = tensor.view(*new_tensor_shape)
-        return tensor.permute(0, 2, 1, 3)
 
-    def forward(self, hidden_states, encoder_states, cross_mask):
+
+    
+    
+    def _transpose_for_scores(self, tensor):  # 私有函数，对输入的3D tensor进行转置操作。
+        new_tensor_shape = tensor.size()[:-1] + (self.num_attention_heads_per_partition, self.hidden_size_per_attention_head)  # 计算新的tensor形状。
+        tensor = tensor.view(*new_tensor_shape)  # 将原始tensor调整为新的形状。
+        return tensor.permute(0, 2, 1, 3)  # 执行一个维度置换操作，并返回结果。
+    
+    def forward(self, hidden_states, encoder_states, cross_mask):  # 模型的前向传播函数，输入是隐藏状态、编码器状态和交叉掩码。
         # hidden_states: [b, s, h]
         # ltor_mask: [1, 1, s, s]
 
         # Attention heads. [b, s, hp]
-        mixed_query_layer = self.query(hidden_states)
-        mixed_x_layer = self.key_value(encoder_states)
-        (mixed_key_layer, mixed_value_layer) = split_tensor_along_last_dim(mixed_x_layer, 2)
+        mixed_query_layer = self.query(hidden_states)  # 生成查询层。
+        mixed_x_layer = self.key_value(encoder_states)  # 生成键值层。
+        (mixed_key_layer, mixed_value_layer) = split_tensor_along_last_dim(mixed_x_layer, 2)  # 将键值层拆分为键层和值层。
+    
+        query_layer = self._transpose_for_scores(mixed_query_layer)  # 将查询层转置。
+        key_layer = self._transpose_for_scores(mixed_key_layer)  # 将键层转置。
+        value_layer = self._transpose_for_scores(mixed_value_layer)  # 将值层转置。
+    
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))  # 计算注意力分数。
+        attention_scores = attention_scores / math.sqrt(self.hidden_size_per_attention_head)  # 对注意力分数进行缩放。
+    
+        if cross_mask is not None:  # 检查是否提供了交叉掩码。
+            attention_scores = torch.mul(attention_scores, cross_mask) - 10000.0 * (1.0 - cross_mask)  # 如果提供了交叉掩码，将其应用到注意力分数上。
+    
+        attention_probs = torch.nn.Softmax(dim=-1)(attention_scores)  # 计算注意力概率。
+    
+        with get_cuda_rng_tracker().fork():  # 启动一个新的CUDA随机数生成器跟踪器上下文。
+            attention_probs = self.attention_dropout(attention_probs)  # 对注意力概率进行dropout操作。
+    
+        context_layer = torch.matmul(attention_probs, value_layer)  # 计算上下文层。
+        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()  # 对上下文层进行置换操作并确保它在内存中是连续的。
+    
+        new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)  # 计算新的上下文层形状。
+        context_layer = context_layer.view(*new_context_layer_shape)  # 将上下文层调整为新的形状。
+    
+        output = self.dense(context_layer)  # 计算输出。
+        output = self.output_dropout(output)  # 对输出进行dropout操作。
+    
+        return output  # 返回输出。
 
-        # Reshape and transpose [b, np, s, hn]
-        query_layer = self._transpose_for_scores(mixed_query_layer)
-        key_layer = self._transpose_for_scores(mixed_key_layer)
-        value_layer = self._transpose_for_scores(mixed_value_layer)
-        # Raw attention scores. [b, np, s, s]
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(
-            self.hidden_size_per_attention_head)
-        if cross_mask is not None:
-            # Apply the left to right attention mask.
-            attention_scores = torch.mul(attention_scores, cross_mask) - \
-                               10000.0 * (1.0 - cross_mask)
-
-        # Attention probabilities. [b, np, s, s]
-        attention_probs = torch.nn.Softmax(dim=-1)(attention_scores)
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
-        with get_cuda_rng_tracker().fork():
-            attention_probs = self.attention_dropout(attention_probs)
-
-        # Context layer.
-        # [b, np, s, hn]
-        context_layer = torch.matmul(attention_probs, value_layer)
-        # [b, s, np, hn]
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + \
-                                  (self.hidden_size_per_partition,)
-        # [b, s, hp]
-        context_layer = context_layer.view(*new_context_layer_shape)
-
-        # Output. [b, s, h]
-        output = self.dense(context_layer)
-        output = self.output_dropout(output)
-
-        return output
 
 
 class ParallelSelfAttention(torch.nn.Module):
