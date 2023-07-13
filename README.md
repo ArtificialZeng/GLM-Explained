@@ -4,7 +4,7 @@ GLM-Explained
 * [/model/](./model/)
    * [modeling_glm.py](/model/modeling_glm.py)
      * class EncoderDecoder(nn.Module):
-* [/mpu/](./mpu/)
+* [/mpu/](./mpu/) 并行处理单元
   * [\__init__.py](/mpu/__init__.py)
   * [transformer.py](/mpu/transformer.py)
     * class PositionalEmbedding(torch.nn.Module):
