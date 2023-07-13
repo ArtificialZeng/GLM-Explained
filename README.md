@@ -5,6 +5,7 @@ GLM-Explained
    * [modeling_glm.py](/model/modeling_glm.py)
      * class EncoderDecoder(nn.Module):
 * [/mpu/](./mpu/)
+  * [\__init__.py](/mpu/__init__.py)
   * [transformer.py](/mpu/transformer.py)
     * class PositionalEmbedding(torch.nn.Module):
     * class ParallelCrossAttention(torch.nn.Module):
@@ -14,6 +15,7 @@ GLM-Explained
     * class ParallelTransformerLayer(torch.nn.Module):
     * class GPT2ParallelTransformer(torch.nn.Module):
    
+
    * [xx.py](./src/utils/peft_trainer.py) 
      * [training_args.py（do_train、do_eval）](/src/transformers/training_args.py)
      * [trainer_seq2seq.py](/src/transformers/trainer_seq2seq.py)
