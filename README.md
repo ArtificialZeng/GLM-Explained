@@ -1,5 +1,8 @@
 # GLM-Explained
 GLM-Explained
+这个项目主要是LLM原理。若是想弄大模型的应用，那么来错地方，建议看[ChatGLM2-Explained](https://github.com/ArtificialZeng/ChatGLM2-6B-Explained)
+
+此外，大模型还基于两个非常重要的基础库，那便是transformers，和pytorch，同样这两个库也有关键代码的逐行解析版本。
 
 * [/model/](./model/)
    * [modeling_glm.py](/model/modeling_glm.py)
