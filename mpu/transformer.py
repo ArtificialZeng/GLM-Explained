@@ -321,12 +321,27 @@ class ParallelSelfAttention(torch.nn.Module):
 
         return output
 
+'''
+@torch.jit.script 是 PyTorch JIT 编译器的一个装饰器，用于转换 PyTorch 模型以便能更加高效地在不同平台上运行。
+
+在 PyTorch 中，JIT 是 Just-In-Time 的缩写，意味着即时编译。当你将 @torch.jit.script 装饰器应用到一个函数或者方法上时，JIT 编译器会将其转化为一个中间表示（IR），然后在运行时对其进行优化和编译。这个中间表示可以在 CPU 或 GPU 上更加高效地运行，并且能够被序列化和保存，然后在其他 Python 运行时环境或者没有 Python 解释器的环境中加载和运行。
+
+使用 @torch.jit.script 装饰器的另一个好处是，它能够确保你的函数或者方法在 JIT 编译和运行时是类型安全的，也就是说，所有的变量和操作都有确定的类型，并且这些类型在运行时是不会改变的。
+
+对于你提供的函数 gelu_impl(x) 来说，如果你在函数定义之前添加 @torch.jit.script 装饰器，那么 JIT 编译器将会处理这个函数，并在运行时进行优化，从而可能提高计算性能。'''
 
 @torch.jit.script
 def gelu_impl(x):
     """OpenAI's gelu implementation."""
     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
                                        (1.0 + 0.044715 * x * x)))
+'''在这个函数中：
+
+tanh 是双曲正切函数，它将输入的每个元素的值变换到区间 (-1, 1)。
+x 是函数的输入。
+乘数 0.7978845608028654 和 0.044715 是 GELU 函数的参数，这些参数的选取使得这个函数能够近似标准高斯误差函数。
+GELU 函数是一种平滑版的 ReLU 函数，它在负值处不是直接将值变为 0，而是给予一定的权重。在深度学习模型中，这样的平滑激活函数常常能够获得更好的训练效果。
+'''
 
 
 def gelu(x):
