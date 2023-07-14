@@ -39,7 +39,9 @@ class PositionalEmbedding(torch.nn.Module):  # 定义 PositionalEmbedding 类，
         super(PositionalEmbedding, self).__init__()  # 调用父类的初始化函数
 
         self.hidden_size = hidden_size  # 将输入的 hidden_size 赋值给类的成员变量
-
+        
+        #创建一个变量inv_freq，其作用是生成一个序列，其中包含0到hidden_size间隔为2的数字。然后，这些数字被除以hidden_size并作为10000的幂来计算，最后取倒数。
+        #这种计算方法主要用于后面的位置嵌入计算，使得不同位置的嵌入在不同的频率有不同的“波峰”和“波谷”。
         inv_freq = 1 / (10000 ** (torch.arange(0.0, hidden_size, 2.0) / hidden_size))  # 计算位置嵌入的倒数频率
         self.register_buffer('inv_freq', inv_freq)  # 注册一个持久缓冲区，将 inv_freq 作为模型的一部分保存下来
 
